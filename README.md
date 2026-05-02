@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="vouched_logo.svg" alt="Vouched Logo" width="320" />
+</p>
+
 # Vouched
 
 A backend API for collecting verified client reviews through single-use tokens. Only clients who receive a private link can submit a review — making every testimonial cryptographically unforgeable.
