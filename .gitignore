@@ -1,51 +1,92 @@
-# NestJS build output
+# ─────────────────────────────────────────────
+# Dependencies
+# ─────────────────────────────────────────────
+/node_modules
+.npm
+.pnp
+.pnp.js
+
+# ─────────────────────────────────────────────
+# Build output
+# ─────────────────────────────────────────────
 /dist
 /build
+*.tsbuildinfo
 
-# Dependencies
-/node_modules
-
-# Environment variables
+# ─────────────────────────────────────────────
+# Environment & secrets  (NEVER commit real values)
+# ─────────────────────────────────────────────
 .env
-.env.development
-.env.test
-.env.production
-.env.local
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+secrets.json
 
-# Logs
+# ─────────────────────────────────────────────
+# Database (local Docker volumes, dumps)
+# ─────────────────────────────────────────────
+/pgdata
+/postgres-data
+*.sqlite
+*.sqlite3
+*.sql.gz
+*.dump
+
+# ─────────────────────────────────────────────
+# TypeORM migrations
+# While studying these stay local. Before your first
+# production deploy: DELETE the next line, generate
+# migrations, and commit src/migrations/ — in prod the
+# migrations are the source of truth for the schema.
+# ─────────────────────────────────────────────
+src/migrations/
+
+# ─────────────────────────────────────────────
+# Test coverage
+# ─────────────────────────────────────────────
+/coverage
+/.nyc_output
+
+# ─────────────────────────────────────────────
+# Logs & caches
+# ─────────────────────────────────────────────
 logs/
 *.log
 npm-debug.log*
 pnpm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+.eslintcache
 
-# TypeORM migrations (generated)
-src/migrations/
-
-# Test coverage
-/coverage
-/.nyc_output
-
-# IDE
+# ─────────────────────────────────────────────
+# Editors & OS
+# ─────────────────────────────────────────────
 .vscode/
+!.vscode/extensions.json
 .idea/
+.history/
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
-
-# OS
 .DS_Store
 Thumbs.db
 
+# ─────────────────────────────────────────────
 # Temp
+# ─────────────────────────────────────────────
 .temp
 .tmp
 /tmp
 
-# Local dev notes
+# ─────────────────────────────────────────────
+# Local dev notes — personal, not for the public repo
+# ─────────────────────────────────────────────
 GUIDE.md
 NOTES.md
 TODO.md
 COMMITS.md
+SCRATCH.md
