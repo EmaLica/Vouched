@@ -14,7 +14,7 @@ Project completed → generate a unique token tied to the client
                   → client opens the link and submits a review
                   → system validates the token (exists, not expired, not yet used)
                   → review is saved as pending, token is permanently burned
-                  → you review it and approve (or reject) it
+                  → you review it and approve it (rejecting deletes it for good; the token stays burned)
                   → once approved, the review appears in the portfolio with a "verified" badge
 ```
 
@@ -33,6 +33,7 @@ The system rests on two guarantees:
 | Database | SQLite (single file, no server) — Postgres-ready |
 | Auth | JWT via Passport.js |
 | Validation | class-validator |
+| Admin UI | React + Vite + Tailwind + shadcn/ui — separate SPA in `admin/`, built in CI, served by the API (see [Admin dashboard](#admin-dashboard)) |
 | Email | Manual for v1 — [Resend](https://resend.com) integration planned for v2 |
 
 ## Design decisions
@@ -61,6 +62,59 @@ deliberate portfolio showcases. Being explicit about which is which:
 - **Manual moderation.** Not overhead — it is the second half of the trust
   model. Even a leaked token cannot publish anything without an explicit
   approval.
+- **The link secret is its own column, not the primary key.** A token row has
+  an internal `id` (uuid) *and* a separate `secret` (uuid, unique, indexed).
+  Only `secret` ever travels in a URL; the primary key stays out of links,
+  logs and foreign-key noise, so the value a client could leak is isolated
+  from everything internal.
+- **Reviews have two states, not three.** `status` is `pending` or `approved`.
+  There is no `rejected`: rejecting a review **deletes the row**. The token it
+  used stays burned, so a rejected submission cannot be retried. Keeping
+  rejected rows would only accumulate moderated-away content with no consumer.
+- **The admin dashboard is a separate front end, and the API is built first.**
+  The backend is the foundation and this README is its contract; the dashboard
+  (`admin/`) is designed against a stable API afterwards. See
+  [Admin dashboard](#admin-dashboard).
+
+## Data model
+
+Two entities, one optional one-to-one relation.
+
+### `Token`
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | uuid PK | internal only — never leaves the server |
+| `secret` | uuid, unique, indexed | the value carried in the private link |
+| `clientName` | varchar(120) | who the token is for — never exposed publicly |
+| `clientEmail` | varchar(255), nullable | your reference only |
+| `project` | varchar(160), nullable | which project it was issued for — never public |
+| `createdAt` | timestamp | |
+| `expiresAt` | timestamp | `createdAt + TOKEN_TTL_HOURS` |
+| `usedAt` | timestamp, nullable | set on use → "burned" |
+| `review` | OneToOne → `Review`, nullable | the review created from this token |
+
+Derived state (not columns): *active* = not used and not past `expiresAt`;
+*used* = `usedAt` set; *expired* = unused and past `expiresAt`.
+
+### `Review`
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | uuid PK | |
+| `authorName` | varchar(120) | shown publicly |
+| `role` | varchar(120), nullable | e.g. "CTO" — shown publicly if present |
+| `company` | varchar(120), nullable | e.g. "Acme" — shown publicly if present |
+| `rating` | int 1–5 | validated in the DTO |
+| `body` | varchar(2000) | review text; explicit max length |
+| `status` | enum `pending` \| `approved` | default `pending` |
+| `createdAt` | timestamp | |
+| `approvedAt` | timestamp, nullable | |
+| `token` | OneToOne → `Token` | FK, `onDelete: RESTRICT` |
+
+No `users` table: the single admin is authenticated from `ADMIN_EMAIL` /
+`ADMIN_PASSWORD_HASH`. Schema is managed by TypeORM `synchronize` in
+development and by committed migrations in production.
 
 ## API
 
@@ -83,32 +137,57 @@ deliberate portfolio showcases. Being explicit about which is which:
 | `PATCH` | `/reviews/:id/approve` | Approve a pending review |
 | `DELETE` | `/reviews/:id` | Reject and remove a review |
 
+## Admin dashboard
+
+The only interactive surface is small — log in, read the pending reviews and
+approve/reject them, mint a token for a client and copy its link, glance at
+active tokens. It is built as a **separate React SPA** (Vite + Tailwind +
+shadcn/ui) in `admin/`, not a CLI: moderation is a visual task, and the
+dashboard is one of the most-looked-at parts of a portfolio project.
+
+- **Served by the API.** The build output is static; NestJS serves it (same
+  origin, no CORS). No second host, no separate deploy.
+- **Auth.** The SPA calls `POST /auth/login`, keeps the JWT client-side, and
+  sends it as `Authorization: Bearer`. No cookies (so CSRF stays out of scope).
+- **Built in CI, not on the device.** A GitHub Actions workflow builds `admin/`
+  and publishes the static bundle; the Orange Pi only pulls the prebuilt
+  assets — a Vite/React build would be slow and memory-tight on an H3.
+- **Sequenced after the API.** Its own design doc, written once the API
+  contract above is stable.
+
 ## Project structure
 
+The NestJS API lives at the repository root; the admin front end is a
+self-contained sub-project in `admin/` with its own `package.json`. One repo,
+one deploy — a lightweight monorepo, no workspace tooling.
+
 ```
-src/
-├── app.module.ts
-├── main.ts
-├── auth/
-│   ├── auth.module.ts
-│   ├── auth.controller.ts
-│   ├── auth.service.ts
-│   ├── jwt.strategy.ts
-│   └── jwt-auth.guard.ts
-├── tokens/
-│   ├── tokens.module.ts
-│   ├── tokens.controller.ts
-│   ├── tokens.service.ts
-│   ├── token.entity.ts
-│   └── dto/
-│       └── create-token.dto.ts
-└── reviews/
-    ├── reviews.module.ts
-    ├── reviews.controller.ts
-    ├── reviews.service.ts
-    ├── review.entity.ts
-    └── dto/
-        └── create-review.dto.ts
+├── src/                         # NestJS API
+│   ├── app.module.ts
+│   ├── main.ts                   # bootstrap: helmet, CORS, global ValidationPipe
+│   ├── config/
+│   │   └── configuration.ts      # reads + validates env vars at startup (fail-fast)
+│   ├── auth/
+│   │   ├── auth.module.ts
+│   │   ├── auth.controller.ts
+│   │   ├── auth.service.ts
+│   │   ├── jwt.strategy.ts
+│   │   └── jwt-auth.guard.ts
+│   ├── tokens/
+│   │   ├── tokens.module.ts
+│   │   ├── tokens.controller.ts
+│   │   ├── tokens.service.ts     # exposes consume(secret) — used by ReviewsService
+│   │   ├── token.entity.ts
+│   │   └── dto/
+│   │       └── create-token.dto.ts
+│   └── reviews/
+│       ├── reviews.module.ts
+│       ├── reviews.controller.ts
+│       ├── reviews.service.ts
+│       ├── review.entity.ts
+│       └── dto/
+│           └── create-review.dto.ts
+└── admin/                        # React + Vite admin SPA (added after the API)
 ```
 
 ## Getting started
@@ -227,6 +306,12 @@ sudo systemctl enable --now vouched
 cd ~/vouched && git pull && npm ci && npm run build && sudo systemctl restart vouched
 ```
 
+### Admin bundle
+
+The `admin/` SPA is **not** built on the device. CI builds it and publishes the
+static bundle; the deploy step fetches that bundle to the path the API serves
+it from. The H3 never runs a Vite/React build.
+
 ### Operational notes
 
 - **SD card wear.** Enable WAL mode on the SQLite connection
@@ -248,10 +333,11 @@ cd ~/vouched && git pull && npm ci && npm run build && sudo systemctl restart vo
 - Admin endpoints are protected by JWT bearer authentication, with short-lived tokens signed by a high-entropy secret
 - Admin credentials are never stored in plaintext — only a bcrypt hash of the password
 - The login endpoint is rate-limited to blunt brute-force attempts
+- The private link carries a dedicated `secret` column, never the token row's primary key, so the one value a client could leak is isolated from internal identifiers and foreign keys
 - Review submission requires a valid token that is single-use and time-limited; tokens are burned immediately upon use, so replay attacks are not possible
 - Token validation and burn happen in a single transaction, so a token can never be consumed twice under concurrent requests
 - Reviews are moderated: nothing is publicly visible until approved, and the public endpoint filters by approval status at the query level
-- Public review responses never expose internal data (token UUID, client email)
+- Public review responses never expose internal data (token secret, client email, project)
 - Input validation enforced via `ValidationPipe` with `whitelist: true` and `forbidNonWhitelisted: true`, blocking mass-assignment of fields like the approval flag
 - Every string field has an explicit maximum length, so a valid token cannot be used to store an oversized payload
 - The JWT strategy pins the signing algorithm (`HS256`) and the token is only ever read from the `Authorization` header, never a cookie — so CSRF does not apply
