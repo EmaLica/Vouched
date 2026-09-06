@@ -151,6 +151,98 @@ FRONTEND_URL=https://yourportfolio.com
 
 > The admin password is never stored in plaintext — only its bcrypt hash. Generate the hash once and put it in `ADMIN_PASSWORD_HASH`. The `JWT_SECRET` must be long and random; anything guessable lets an attacker forge admin tokens.
 
+## Deployment
+
+The reference target is a low-power ARM SBC kept on 24/7 — an **Orange Pi PC
+(Allwinner H3, 4× Cortex-A7, ~1 GB RAM, `armv7l`)** running Armbian (Debian 13
+"trixie"). SQLite fits this profile exactly: no database server to run, the
+whole state is one file next to the app, and RAM headroom stays wide (Node +
+NestJS ≈ 100–150 MB).
+
+What actually gets deployed is **the NestJS application** — this repo, plus
+dependencies installed on the device. SQLite is not a separate service: it
+arrives as a library in `node_modules`, and the `.sqlite` file is created by
+TypeORM on first boot. `node_modules/`, `dist/`, `.env` and `*.sqlite` are all
+git-ignored and never leave the device.
+
+### Node version
+
+The NestJS 12 build toolchain requires **Node ≥ 22**. Debian trixie only ships
+Node 20 (`nest build` fails on it with `ERR_REQUIRE_CYCLE_MODULE`), so install
+the official ARMv7 build over it:
+
+```bash
+cd /tmp
+curl -fLO https://nodejs.org/dist/v22.20.0/node-v22.20.0-linux-armv7l.tar.xz
+sudo tar -xJf node-v22.20.0-linux-armv7l.tar.xz -C /usr/local --strip-components=1
+sudo apt purge -y nodejs npm && sudo apt autoremove -y   # avoid PATH conflicts
+hash -r && node -v   # v22.x, at /usr/local/bin/node
+```
+
+Also install the build toolchain — `sudo apt install -y git build-essential
+python3 sqlite3` — so `better-sqlite3` can compile if no `armv7l` prebuild is
+available (a few minutes, once).
+
+### First deploy
+
+```bash
+git clone https://github.com/EmaLica/Vouched.git ~/vouched && cd ~/vouched
+npm ci
+cp .env.example .env          # then fill in real values
+npm run build
+node dist/main.js             # smoke test — expect "Nest application successfully started"
+```
+
+### Run it 24/7 (systemd)
+
+```ini
+# /etc/systemd/system/vouched.service
+[Unit]
+Description=Vouched API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ema
+WorkingDirectory=/home/ema/vouched
+ExecStart=/usr/local/bin/node /home/ema/vouched/dist/main.js
+Environment=NODE_ENV=production
+Environment=PORT=3000
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now vouched
+```
+
+### Subsequent releases
+
+```bash
+cd ~/vouched && git pull && npm ci && npm run build && sudo systemctl restart vouched
+```
+
+### Operational notes
+
+- **SD card wear.** Enable WAL mode on the SQLite connection
+  (`PRAGMA journal_mode=WAL`) to cut write amplification. Armbian already puts
+  `/var/log` on zram, which helps. For real safety, keep the `.sqlite` file on a
+  USB SSD rather than the SD card.
+- **Backups.** The database is a single small file — a cron job running
+  `sqlite3 vouched.sqlite ".backup '/path/backup.sqlite'"` (or `VACUUM INTO`)
+  and syncing it off-device is enough.
+- **Clock.** The H3 has no battery-backed RTC; keep `systemd-timesyncd` enabled
+  or `apt` signature checks fail after a reboot without network.
+- **Reachability.** Over a private tailnet the API is reachable at the device's
+  Tailscale IP with no router ports opened. Clients who receive a review link
+  are *not* on the tailnet, so public exposure (Tailscale Funnel, or a reverse
+  proxy) is needed before the review flow works end to end.
+
 ## Security
 
 - Admin endpoints are protected by JWT bearer authentication, with short-lived tokens signed by a high-entropy secret
