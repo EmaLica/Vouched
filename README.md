@@ -30,10 +30,37 @@ The system rests on two guarantees:
 | Framework | [NestJS](https://nestjs.com) |
 | Language | TypeScript |
 | ORM | TypeORM |
-| Database | PostgreSQL |
+| Database | SQLite (single file, no server) — Postgres-ready |
 | Auth | JWT via Passport.js |
 | Validation | class-validator |
-| Email | Resend |
+| Email | Manual for v1 — [Resend](https://resend.com) integration planned for v2 |
+
+## Design decisions
+
+Some choices here are driven by the real scale of the problem; others are
+deliberate portfolio showcases. Being explicit about which is which:
+
+- **SQLite, not PostgreSQL.** The workload is tiny — one freelancer, a handful
+  of tokens and reviews per month, a single writer. SQLite is a single file
+  with no server to run, no Docker, no connection config, and nothing to "keep
+  running". TypeORM keeps the code database-agnostic, so moving to Postgres
+  later is a one-line driver change. Relational modelling (entities, foreign
+  keys, one-to-one relations, atomic transactions) is demonstrated exactly the
+  same way.
+- **JWT + Passport.js for auth — a showcase, not a necessity.** With a single
+  admin, a static bearer key in an environment variable would be enough. Full
+  JWT authentication (login endpoint, bcrypt-hashed password, signed
+  short-lived tokens, Passport strategy) is implemented because it is a
+  standard backend skill worth demonstrating, and because it makes the
+  security reasoning behind the project concrete.
+- **Manual review-link delivery for v1.** `POST /tokens` returns the private
+  link; you send it to the client however you already talk to them. Automated
+  email (Resend) adds a third-party account, an API key, DNS records for
+  deliverability, and send-failure handling — disproportionate for a few
+  clients a year. It is planned as a v2 feature.
+- **Manual moderation.** Not overhead — it is the second half of the trust
+  model. Even a leaked token cannot publish anything without an explicit
+  approval.
 
 ## API
 
@@ -49,7 +76,7 @@ The system rests on two guarantees:
 | Method | Endpoint | Description |
 |---|---|---|
 | `POST` | `/auth/login` | Obtain a JWT |
-| `POST` | `/tokens` | Generate a token for a client |
+| `POST` | `/tokens` | Generate a token for a client and return the private review link |
 | `GET` | `/tokens` | List all tokens (active and used) |
 | `DELETE` | `/tokens/:id` | Delete a token |
 | `GET` | `/reviews/pending` | List reviews awaiting approval |
@@ -100,11 +127,11 @@ npm run start:dev
 ### Environment variables
 
 ```env
-DB_HOST=localhost
-DB_PORT=5432
-DB_USERNAME=postgres
-DB_PASSWORD=yourpassword
-DB_DATABASE=vouched
+NODE_ENV=development
+
+# SQLite database file. In production, point this at a path on a persistent
+# volume, or switch the driver to Postgres — the code stays database-agnostic.
+DB_FILE=vouched.sqlite
 
 # Generate with: openssl rand -hex 32
 JWT_SECRET=
@@ -117,7 +144,8 @@ ADMIN_PASSWORD_HASH=$2b$12$...
 # How long a token stays valid after it's issued
 TOKEN_TTL_HOURS=168
 
-RESEND_API_KEY=re_...
+# Base URL of the portfolio page that opens the review form. Fixed value —
+# never derived from the request Host header.
 FRONTEND_URL=https://yourportfolio.com
 ```
 
@@ -133,7 +161,14 @@ FRONTEND_URL=https://yourportfolio.com
 - Reviews are moderated: nothing is publicly visible until approved, and the public endpoint filters by approval status at the query level
 - Public review responses never expose internal data (token UUID, client email)
 - Input validation enforced via `ValidationPipe` with `whitelist: true` and `forbidNonWhitelisted: true`, blocking mass-assignment of fields like the approval flag
-- CORS is restricted to the portfolio origin, and `helmet` sets baseline security headers
+- Every string field has an explicit maximum length, so a valid token cannot be used to store an oversized payload
+- The JWT strategy pins the signing algorithm (`HS256`) and the token is only ever read from the `Authorization` header, never a cookie — so CSRF does not apply
+- The review link is single-use and short-lived; the portfolio page sends `Referrer-Policy: no-referrer` and strips the token from the URL on load, so it does not leak through logs or the `Referer` header
+- Review text is stored raw and escaped by the portfolio at render time (never `innerHTML`); incoming HTML is also stripped as defense in depth
+- CORS is restricted to the portfolio origin, and `helmet` sets baseline security headers including HSTS
+
+The reasoning behind each of these — the attack it stops and where the defense
+lives in the request pipeline — is documented alongside the implementation.
 
 ## License
 
