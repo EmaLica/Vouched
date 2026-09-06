@@ -1,10 +1,10 @@
 {
-  "name": "Vouched",
+  "name": "vouched",
   "version": "0.0.1",
-  "description": "",
-  "author": "",
+  "description": "A token-based authentication system built with NestJS.",
+  "author": "EmaLica",
   "private": true,
-  "license": "UNLICENSED",
+  "license": "MIT",
   "scripts": {
     "build": "nest build",
     "deploy": "nest deploy",
